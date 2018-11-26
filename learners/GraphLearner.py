@@ -4,7 +4,8 @@ import random
 import string
 
 class GraphLearner:
-    """Take a folder containing a data.txt file and build a creation model.
+    """
+    Take a folder containing a data.txt file and build a creation model.
     The model will dump the file as model.json
     """
 
@@ -12,7 +13,8 @@ class GraphLearner:
     END = "#end#"
 
     def __init__(self, folder='simplelist', max_passwords=500, min_password_size=8):
-        """Create the learner, with empty model and data.
+        """
+        Create the learner, with empty model and data.
 
         Optional: 
             - min_password_size: minimum size of acceptable passwords, default is 0.
@@ -33,7 +35,8 @@ class GraphLearner:
         self.folder = folder
 
     def load_data(self):
-        """Load the learning data from the data.txt file.
+        """
+        Load the learning data from the data.txt file.
         """
         full_filename = os.path.join(self.folder, 'data.txt')
         with open(full_filename, 'r') as f:
