@@ -15,10 +15,13 @@ import matplotlib.pyplot as plt
 
 import sys
 import os
+import string
 
 import numpy as np
 
 class GAN():
+
+    ALLOWED_CHARS = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%&*+=-_|:?'
 
     def __init__(self, folder='data/leaked10000', min_password_size=8):
 
@@ -26,12 +29,19 @@ class GAN():
         self.data = []
         self.min_password_size = min_password_size
 
+        self.generated = []
+
         self.word_rows = 1 # A word is just 2 dimensions
-        self.word_cols = 100 # Passwords with more than 100 characters are quite rare (Warning: Unicode chars can count as 4!!!)
+        self.word_cols = 32 # Passwords with more than 32 characters are quite rare (Warning: Unicode chars can count as 4!!!)
         self.channels = 1 # Coming from image processing, I guess, not relevant here? (Could be language?)
         self.word_shape = (self.word_rows, self.word_cols, self.channels)
 
+        self.noise_width = 16
+
         optimizer = Adam(0.0002, 0.5)
+
+
+        self.char_range = len(self.ALLOWED_CHARS) + 1
 
         # Build and compile the discriminator
         self.discriminator = self.build_discriminator()
@@ -42,21 +52,57 @@ class GAN():
         self.generator.compile(loss='binary_crossentropy', optimizer=optimizer)
 
         # The generator takes noise as input and generated words
-        z = Input(shape=(100,))
+        z = Input(shape=(self.noise_width,))
         word = self.generator(z)
 
         # For the combined model we will only train the generator
         self.discriminator.trainable = False
 
-        # The valid takes generated images as input and determines validity
+        # The valid takes generated words as input and determines validity
         valid = self.discriminator(word)
 
         # The combined model  (stacked generator and discriminator) takes
-        # noise as input => generates images => determines validity
+        # noise as input => generates words => determines validity
         self.combined = Model(z, valid)
         self.combined.compile(loss='binary_crossentropy', optimizer=optimizer)
 
+        self.train_infos = []
+
         # 9527
+
+    def string_to_intarray(self, str_val):
+        # Initialize the list of int representing the word
+        w = np.zeros((1, self.word_cols), dtype=int)
+        for i in range(len(str_val)):
+            # Get the letter at the index
+            c = str_val[i]
+            c = self.ALLOWED_CHARS.find(c)
+            # Normalize c, so the value starts at 0
+            c += 1
+            w[0][i] = c
+        return w
+    def intarray_to_string(self, int_arr):
+        res = []
+        for u in int_arr[0]:
+            u = u - 1
+            if u >= 0:
+                try:
+                    res.append(self.ALLOWED_CHARS[u])
+                except:
+                    print('u out of bound: %s' % u)
+                    res.append(' ')
+            else:
+                res.append(' ')
+        return ''.join(res).strip()
+
+    def intarray_to_normalized(self, int_arr):
+        shift = self.char_range / 2
+        res = (int_arr.astype(np.float32) - shift) / shift
+        return res
+    def normalized_to_intarray(self, nmz_arr):
+        shift = self.char_range / 2
+        res = (nmz_arr * shift + shift).astype(int)
+        return res
 
     def load_data(self):
         """
@@ -67,29 +113,43 @@ class GAN():
             d = f.read()
             res = []
             for e in d.split('\n'):
+                e = e[:32]
                 e = e.strip()
                 if len(e) > self.min_password_size:
-                    w = np.zeros((1, self.word_cols), dtype=int)
-                    e = e.encode('utf-8')                    
-                    for i in range(len(e)):
-                        w[0][i] = e[i]
+                    w = self.string_to_intarray(e)
                     res.append(w)
+
+            # Now we know the size of the list of word, we initalize the data size with 0s
             self.data = np.zeros((len(res), 1, self.word_cols))
+            # And we copy our data
             for i in range(len(res)):
                 self.data[i] = res[i]
 
+                # d = []
+                # for e in res[i][0]:
+                #     d.append('%2d' % e)
+                # print(' '.join(d))
+
     def build_generator(self):
-        noise_shape = (100,)
+        noise_shape = (self.noise_width,)
         model = Sequential()
-        model.add(Dense(256, input_shape=noise_shape))
+
+        model.add(Dense(32, input_shape=noise_shape))
         model.add(LeakyReLU(alpha=0.2))
         model.add(BatchNormalization(momentum=0.8))
+
+        model.add(Dense(128))
+        model.add(LeakyReLU(alpha=0.2))
+        model.add(BatchNormalization(momentum=0.8))
+
         model.add(Dense(512))
         model.add(LeakyReLU(alpha=0.2))
         model.add(BatchNormalization(momentum=0.8))
-        model.add(Dense(1024))
+
+        model.add(Dense(32))
         model.add(LeakyReLU(alpha=0.2))
         model.add(BatchNormalization(momentum=0.8))
+
         model.add(Dense(np.prod(self.word_shape), activation='tanh'))
         model.add(Reshape(self.word_shape))
         model.summary()
@@ -101,12 +161,17 @@ class GAN():
     def build_discriminator(self):
         word_shape = (self.word_rows, self.word_cols, self.channels)
         model = Sequential()
+
         model.add(Flatten(input_shape=word_shape))
         model.add(Dense(512))
         model.add(LeakyReLU(alpha=0.2))
-        model.add(Dense(256))
+        model.add(Dense(128))
         model.add(LeakyReLU(alpha=0.2))
+        model.add(Dense(16))
+        model.add(LeakyReLU(alpha=0.2))
+
         model.add(Dense(1, activation='sigmoid'))
+        # model.add(Dense(1, activation='sigmoid'))
         model.summary()
 
         word = Input(shape=word_shape)
@@ -117,14 +182,14 @@ class GAN():
 
         # Load the dataset
         self.load_data()
-        # (X_train, _), (_, _) = self.data
-        X_train = self.data
 
-        # Rescale -1 to 1
-        X_train = (X_train.astype(np.float32) - 127.5) / 127.5
+        X_train = self.intarray_to_normalized(self.data)
         X_train = np.expand_dims(X_train, axis=3)
 
         half_batch = int(batch_size / 2)
+
+        self.train_infos = []
+        self.generated = []
 
         for epoch in range(epochs):
 
@@ -132,50 +197,85 @@ class GAN():
             #  Train Discriminator
             # ---------------------
 
-            # Select a random half batch of images
+            # Select a random half batch of real words
             idx = np.random.randint(0, X_train.shape[0], half_batch)
-            words = X_train[idx]
+            real_words = X_train[idx]
 
-            noise = np.random.normal(0, 1, (half_batch, 100))
-
-            # Generate a half batch of new images
-            gen_words = self.generator.predict(noise)
+            # Generate a half batch of new fake words
+            noise = np.random.normal(0, 1, (half_batch, self.noise_width))
+            fake_words = self.generator.predict(noise)
 
             # Train the discriminator
-            d_loss_real = self.discriminator.train_on_batch(words, np.ones((half_batch, 1)))
-            d_loss_fake = self.discriminator.train_on_batch(gen_words, np.zeros((half_batch, 1)))
-            d_loss = 0.5 * np.add(d_loss_real, d_loss_fake)
+            d_loss_real = self.discriminator.train_on_batch(real_words, np.ones((half_batch, 1)))
+            d_loss_fake = self.discriminator.train_on_batch(fake_words, np.zeros((half_batch, 1)))
 
+            d_loss = 0.5 * np.add(d_loss_real, d_loss_fake)
 
             # ---------------------
             #  Train Generator
             # ---------------------
 
-            noise = np.random.normal(0, 1, (batch_size, 100))
-
-            # The generator wants the discriminator to label the generated samples
-            # as valid (ones)
+            # Generate a half batch of '1' as target
             valid_y = np.array([1] * batch_size)
-
-            # Train the generator
+            noise = np.random.normal(0, 1, (batch_size, self.noise_width))
             g_loss = self.combined.train_on_batch(noise, valid_y)
 
-            # Plot the progress
-            print ("%d [D loss: %f, acc.: %.2f%%] [G loss: %f]" % (epoch, d_loss[0], 100*d_loss[1], g_loss))
+            # ---------------------
+            #  Data mgt.
+            # ---------------------
 
             # If at save interval => save generated image samples
             if epoch % save_interval == 0:
-                self.save_words(epoch)
+                # self.train_infos.append((epoch, d_loss[0], 100*d_loss[1], g_loss))
+                print('')
+                print('d_loss_real', d_loss_real)
+                print('d_loss_fake', d_loss_fake)
+                print ("%d [D loss: %f, acc.: %.2f%%] [G loss: %f]" % (epoch, d_loss[0], 100*d_loss[1], g_loss))
+                self.create_words(epoch)
 
-    def save_words(self, epoch):
-        pass
-        # r, c = 5, 5
-        # noise = np.random.normal(0, 1, (r * c, 100))
-        # gen_words = self.generator.predict(noise)
+        # Once all completed
+        full_filename = os.path.join(self.folder, 'stats.csv')
+        with open(full_filename, 'w') as f:
+            f.write('epoch, d_loss, acc, g_loss\n')
+            for a in self.train_infos:
+                f.write('%d, %f, %.2f%%, %f\n' % a)
 
-        # # Rescale images 0 - 1
+        self.save_results()
+
+    def create_words(self, epoch):
+        sample_size = 10
+        noise = np.random.normal(0, 1, (sample_size, self.noise_width))
+        fake_word = self.generator.predict(noise)
+
+        def process_letter(l):
+            if ord(l) == 0:
+                return ' '
+            elif l in self.ALLOWED_CHARS:
+                return l
+            else:
+                return '~'
+
+        for t in range(sample_size):
+            v = fake_word[t, :, :, 0]
+            w = self.normalized_to_intarray(v)
+            r = self.intarray_to_string(w)
+            self.generated.append(r)
+            print('New word:', r)
+
+
+    def save_results(self):
+        """Save the generated words in the data folder as list.txt.
+        """
+        full_filename = os.path.join(self.folder, 'list_gan.txt')
+        with open(full_filename, 'w') as f:
+            for e in self.generated:
+                f.write(e + '\n')
+
+
+        # # Rescale words 0 - 1
         # gen_words = 0.5 * gen_words + 0.5
 
+        # for i in range(self.)
         # fig, axs = plt.subplots(r, c)
         # cnt = 0
         # for i in range(r):
@@ -183,12 +283,24 @@ class GAN():
         #         axs[i,j].imshow(gen_words[cnt, :,:,0], cmap='gray')
         #         axs[i,j].axis('off')
         #         cnt += 1
-        # fig.savefig("gan/images/mnist_%d.png" % epoch)
+        # fig.savefig("gan/words/mnist_%d.png" % epoch)
         # plt.close()
 
 
 if __name__ == '__main__':
+
     gan = GAN()
+
+
+    test_s = 'thisiatest00!#'
+    test_a = gan.string_to_intarray(test_s)
+    test_n = gan.intarray_to_normalized(test_a)
+    test_u = gan.normalized_to_intarray(test_n)
+    test_f = gan.intarray_to_string(test_u)
+    assert(test_s == test_f)
+
     gan.load_data()
 
-    gan.train(epochs=30000, batch_size=32, save_interval=200)
+    gan.train(epochs=1000000, batch_size=1024, save_interval=100)
+
+    # print(gan.generated)
