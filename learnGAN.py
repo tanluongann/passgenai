@@ -231,7 +231,7 @@ class GAN():
                 print('d_loss_real', d_loss_real)
                 print('d_loss_fake', d_loss_fake)
                 print ("%d [D loss: %f, acc.: %.2f%%] [G loss: %f]" % (epoch, d_loss[0], 100*d_loss[1], g_loss))
-                self.create_words(epoch)
+                self.create_words()
 
         # Once all completed
         full_filename = os.path.join(self.folder, 'stats.csv')
@@ -242,19 +242,9 @@ class GAN():
 
         self.save_results()
 
-    def create_words(self, epoch):
-        sample_size = 10
+    def create_words(self, sample_size=10):
         noise = np.random.normal(0, 1, (sample_size, self.noise_width))
         fake_word = self.generator.predict(noise)
-
-        def process_letter(l):
-            if ord(l) == 0:
-                return ' '
-            elif l in self.ALLOWED_CHARS:
-                return l
-            else:
-                return '~'
-
         for t in range(sample_size):
             v = fake_word[t, :, :, 0]
             w = self.normalized_to_intarray(v)
@@ -290,17 +280,7 @@ class GAN():
 if __name__ == '__main__':
 
     gan = GAN()
-
-
-    test_s = 'thisiatest00!#'
-    test_a = gan.string_to_intarray(test_s)
-    test_n = gan.intarray_to_normalized(test_a)
-    test_u = gan.normalized_to_intarray(test_n)
-    test_f = gan.intarray_to_string(test_u)
-    assert(test_s == test_f)
-
     gan.load_data()
-
     gan.train(epochs=1000000, batch_size=1024, save_interval=100)
 
     # print(gan.generated)
